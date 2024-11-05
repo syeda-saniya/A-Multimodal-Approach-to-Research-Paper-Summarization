@@ -3,16 +3,26 @@ import re
 import pdfplumber
 import PyPDF2
 from typing import Dict, List, Tuple
+from contextlib import contextmanager
 
 class PDFProcessor:
+    @contextmanager
+    def open_pdf(self, pdf_path):
+        """Context manager to ensure PDF files are properly closed."""
+        pdf = pdfplumber.open(pdf_path)
+        try:
+            yield pdf
+        finally:
+            pdf.close()
+
     def extract_text_from_columns(self, page) -> List[str]:
         """Extract text from columns in a page."""
         column_texts = []
         width = page.width
         height = page.height
         column_boundaries = [
-            (0, 0, width / 2, height),     # Left column boundary
-            (width / 2, 0, width, height)  # Right column boundary
+            (0, 0, width / 2, height),
+            (width / 2, 0, width, height)
         ]
 
         for boundary in column_boundaries:
@@ -42,9 +52,7 @@ class PDFProcessor:
         """Extract text and tables from PDF file."""
         text_per_page = {}
 
-        with open(pdf_path, 'rb') as pdfFileObj:
-            pdf = pdfplumber.open(pdf_path)
-
+        with self.open_pdf(pdf_path) as pdf:
             for pagenum, page in enumerate(pdf.pages):
                 column_texts = self.extract_text_from_columns(page)
                 tables = self.extract_table(page)
@@ -94,25 +102,20 @@ class PDFProcessor:
 
     def process_pdf(self, pdf_path: str) -> Dict[str, str]:
         """Process PDF file and extract structured content."""
-        # Extract raw text from PDF
         text_per_page = self.extract_content_from_pdf(pdf_path)
         
-        # Combine text from all pages
         pdf_text = ""
         for page_key in sorted(text_per_page.keys()):
             pdf_text += text_per_page[page_key]['text'] + "\n"
 
-        # Process the text
         modified_pdf_text = pdf_text
         for word in ["REFERENCES", "References"]:
             modified_pdf_text = self.delete_text_after_word(modified_pdf_text, word)
         
         modified_pdf_text = self.delete_text_before_word(modified_pdf_text, "Abstract")
         
-        # Extract abstract
         extracted_text_before_intro = modified_pdf_text.split("INTRODUCTION")[0].strip()
         
-        # Combine all extracted sections
         complete_extracted_text = {"Abstract": extracted_text_before_intro}
         sections = self.extract_sections(modified_pdf_text)
         complete_extracted_text.update(sections)
