@@ -1,19 +1,18 @@
 import os
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from .utils.figures_context import extract_paragraphs_with_figures_from_sections
-from .utils.pdf_process import PDFProcessor
-from .utils.image_extraction import PDFImageExtractor
+from app.utils.pdf_process import PDFProcessor
+from app.utils.image_extraction import ImageExtractor
 import shutil
 from pathlib import Path
-import asyncio
-import shutil
 import asyncio
 import httpx
 from typing import Dict
 
 UPLOAD_DIR = Path("uploads")
+FIGURE_DIR = Path("extracted_figures")  # Add directory for figures
 UPLOAD_DIR.mkdir(exist_ok=True)
+FIGURE_DIR.mkdir(exist_ok=True)  # Create figures directory
 
 app = FastAPI(
     title="PDF Extractor API",
@@ -21,7 +20,7 @@ app = FastAPI(
     version="1.0.0"
 )
 
-NGROK_URL = "https://ae99-35-201-134-19.ngrok-free.app/summarize"
+NGROK_URL = "https://66cb-34-75-189-225.ngrok-free.app/summarize"
 
 # Configure CORS
 app.add_middleware(
@@ -31,24 +30,20 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-async def get_summaries(sections: Dict[str, str]) -> Dict[str, str]:
-    """
-    Get summaries for sections from ngrok service
-    """
+async def get_summaries(payload: Dict) -> Dict[str, str]:
+    """Get summaries for sections and images from ngrok service"""
     async with httpx.AsyncClient() as client:
         try:
             response = await client.post(
                 NGROK_URL,
-                json={"sections": sections},
-                timeout=300  # 5 minutes timeout for long texts
+                json=payload,
+                timeout=300
             )
             response.raise_for_status()
             result = response.json()
             
             if result['status'] == 'success':
-                return result['summaries']
+                return result
             else:
                 raise HTTPException(
                     status_code=500,
@@ -80,7 +75,7 @@ async def remove_file(file_path: Path, max_attempts: int = 5, delay: float = 0.5
             else:
                 print(f"Warning: Could not remove temporary file {file_path}")
 
-@app.post("/upload", )
+@app.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
     """
     Upload and process a PDF file.
@@ -91,29 +86,51 @@ async def upload_file(file: UploadFile = File(...)):
     
     file_path = UPLOAD_DIR / file.filename
     try:
+        # Save uploaded file
         with file_path.open("wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
         
+        # Initialize processors
         pdf_processor = PDFProcessor()
-        extractor = PDFImageExtractor()
-        images = extractor.extract_images(str(file_path))
-        print("Extracted images:", images)
+        image_extractor = ImageExtractor(output_dir=str(FIGURE_DIR))
+        
+        # Extract text content
         extracted_text = pdf_processor.process_pdf(str(file_path))
-        figures_context = extract_paragraphs_with_figures_from_sections(extracted_text)
-        summaries = await get_summaries(extracted_text)
+        
+        # Process images and get their context
+        figure_data = image_extractor.process_pdf(str(file_path), extracted_text)
+        # figures_context = image_extractor._extract_figures_context(extracted_text)
+        llava_data = image_extractor.prepare_for_llava(figure_data)
+        
+        payload = {
+            "sections": extracted_text,
+            "image_data": llava_data
+        }
+        
+        print(payload)
+        
+        # Send the combined payload to /summarize endpoint
+        summaries = await get_summaries(payload)
+        
+        
+        # Schedule file cleanup
         asyncio.create_task(remove_file(file_path))
         
-        return dict(
-            message="File successfully processed",
-            sections=extracted_text,
-            figures_context=figures_context,
-            images=images,
-            summaries=summaries
-        )
+        return {
+            "message": "File successfully processed",
+            "summaries": summaries.get("section_summaries", {}),
+            "image_summaries": summaries.get("image_summaries", {}),
+            "final_summary": summaries.get("final_summary", {})
+        }
     
     except Exception as e:
+        # Ensure cleanup on error
         asyncio.create_task(remove_file(file_path))
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        # Clean up any extracted images that are no longer needed
+        for image_file in FIGURE_DIR.glob("*.{jpg,jpeg,png}"):
+            asyncio.create_task(remove_file(image_file))
 
 if __name__ == "__main__":
     import uvicorn
