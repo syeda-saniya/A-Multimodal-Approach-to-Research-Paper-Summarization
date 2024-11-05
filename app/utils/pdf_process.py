@@ -100,6 +100,15 @@ class PDFProcessor:
 
         return sections
 
+    def clean_section_titles(self, sections):
+        cleaned_sections = {}
+        for title, content in sections.items():
+            # If any content accidentally attaches to the title, we clean it
+            cleaned_title = title.split("\n")[0].strip()  # Keep only the first line of the title
+            cleaned_sections[cleaned_title] = content
+
+        return cleaned_sections
+
     def process_pdf(self, pdf_path: str) -> Dict[str, str]:
         """Process PDF file and extract structured content."""
         text_per_page = self.extract_content_from_pdf(pdf_path)
@@ -119,5 +128,7 @@ class PDFProcessor:
         complete_extracted_text = {"Abstract": extracted_text_before_intro}
         sections = self.extract_sections(modified_pdf_text)
         complete_extracted_text.update(sections)
+        cleaned_sections = self.clean_section_titles(complete_extracted_text)
         
-        return complete_extracted_text
+        
+        return cleaned_sections
