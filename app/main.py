@@ -118,7 +118,7 @@ async def upload_file(file: UploadFile = File(...)):
         
         return {
             "message": "File successfully processed",
-            "summaries": summaries.get("section_summaries", {}),
+            "section_summaries": summaries.get("section_summaries", {}),
             "image_summaries": summaries.get("image_summaries", {}),
             "final_summary": summaries.get("final_summary", {})
         }
